@@ -1,0 +1,47 @@
+# Vercel
+.vercel
+.vercelignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+ENV/
+env/
+.env
+.env.local
+
+# Databases
+*.db
+*.sqlite
+
+# Generated reports & test output
+*.xlsx
+*.pdf
+backend/*.xlsx
+backend/*.pdf
+combined_test_report.xlsx
+
+# Uploads
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# Android/Gradle
+.gradle/
+build/
+android/.gradle/
+android/.idea/
+android/.kotlin/
+android/build/
+android/app/build/
+android/local.properties
+
+# IDEs & System files
+.idea/
+.vscode/
+*.log
+.DS_Store
+Thumbs.db
