@@ -37,6 +37,38 @@ async def lifespan(app: FastAPI):
     yield
 
 
+from collections import defaultdict
+import time
+from fastapi import Request
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, limit: int = 10, window: int = 60):
+        super().__init__(app)
+        self.limit = limit
+        self.window = window
+        self.requests = defaultdict(list)
+
+    async def dispatch(self, request: Request, call_next):
+        # Apply rate limiting to login and signup endpoints
+        if request.method == "POST" and (
+            request.url.path.endswith("/auth/login") or 
+            request.url.path.endswith("/auth/signup")
+        ):
+            client_ip = request.client.host if request.client else "unknown"
+            now = time.time()
+            # Retain only request timestamps within the sliding window
+            self.requests[client_ip] = [t for t in self.requests[client_ip] if now - t < self.window]
+            if len(self.requests[client_ip]) >= self.limit:
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": "Too many requests. Please try again later."}
+                )
+            self.requests[client_ip].append(now)
+        return await call_next(request)
+
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     description="Secure Medical AI platform for Oral Epithelial Dysplasia grading",
@@ -44,10 +76,21 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — allow Android emulator and local dev
+# Apply Rate Limiting Middleware
+app.add_middleware(RateLimitMiddleware, limit=10, window=60)
+
+# CORS — restrict origins for credential-sharing safety
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://oral-dysplasia-ai.vercel.app",
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "http://localhost:5173",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:8000",
+        "http://127.0.0.1:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -58,6 +101,7 @@ app.include_router(auth.router, prefix=settings.API_V1_PREFIX)
 app.include_router(slides.router, prefix=settings.API_V1_PREFIX)
 app.include_router(analysis.router, prefix=settings.API_V1_PREFIX)
 app.include_router(reports.router, prefix=settings.API_V1_PREFIX)
+
 
 
 @app.get("/health")

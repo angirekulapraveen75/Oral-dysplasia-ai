@@ -19,6 +19,14 @@ async def signup(body: SignUpRequest, db: AsyncSession = Depends(get_db)):
     if existing.scalars().first():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Email already registered")
 
+    # Validate signup role
+    ALLOWED_ROLES = {"Consultant Pathologist", "Resident", "Lab Tech"}
+    if body.role not in ALLOWED_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid role. Role must be one of: {list(ALLOWED_ROLES)}"
+        )
+
     user = User(
         email=body.email,
         hashed_password=hash_password(body.password),

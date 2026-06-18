@@ -38,6 +38,18 @@ async def get_current_user(
     return user
 
 
+def require_roles(allowed_roles: list[str]):
+    async def dependency(user: User = Depends(get_current_user)):
+        if user.role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Insufficient permissions. Required roles: {allowed_roles}"
+            )
+        return user
+    return dependency
+
+
+
 # ── Helpers ─────────────────────────────────────────────────────────
 def _slide_to_response(s: Slide) -> SlideResponse:
     return SlideResponse(
@@ -66,7 +78,7 @@ async def upload_slide(
     patient_gender: Optional[str] = Form(None),
     anatomical_site: str = Form(...),
     clinical_notes: Optional[str] = Form(None),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_roles(["Consultant Pathologist", "Resident", "Lab Tech"])),
     db: AsyncSession = Depends(get_db),
 ):
     allowed = {".svs", ".ndpi", ".tiff", ".tif", ".jpg", ".jpeg", ".png"}
@@ -111,8 +123,9 @@ async def slide_library(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    q = select(Slide).order_by(Slide.created_at.desc())
-    count_q = select(func.count(Slide.id))
+    # Enforce database scoping (IDOR prevention): only retrieve slides uploaded by this user
+    q = select(Slide).where(Slide.user_id == user.id).order_by(Slide.created_at.desc())
+    count_q = select(func.count(Slide.id)).where(Slide.user_id == user.id)
 
     if grade:
         q = q.where(Slide.current_grade == grade)
@@ -142,6 +155,11 @@ async def get_slide(
     slide = result.scalars().first()
     if not slide:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Slide not found")
+        
+    # Enforce ownership check (IDOR prevention)
+    if slide.user_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Access denied to this slide resource")
+        
     return _slide_to_response(slide)
 
 
@@ -151,21 +169,32 @@ async def dashboard_stats(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    total = (await db.execute(select(func.count(Slide.id)))).scalar() or 0
+    # Scope stats to only the current user's slides
+    total = (await db.execute(
+        select(func.count(Slide.id)).where(Slide.user_id == user.id)
+    )).scalar() or 0
     pending = (await db.execute(
-        select(func.count(Slide.id)).where(Slide.status.in_(["uploaded", "ready", "preprocessing"]))
+        select(func.count(Slide.id))
+        .where(Slide.status.in_(["uploaded", "ready", "preprocessing"]))
+        .where(Slide.user_id == user.id)
     )).scalar() or 0
     severe = (await db.execute(
-        select(func.count(Slide.id)).where(Slide.current_grade == "severe")
+        select(func.count(Slide.id))
+        .where(Slide.current_grade == "severe")
+        .where(Slide.user_id == user.id)
     )).scalar() or 0
     mild = (await db.execute(
-        select(func.count(Slide.id)).where(Slide.current_grade == "mild")
+        select(func.count(Slide.id))
+        .where(Slide.current_grade == "mild")
+        .where(Slide.user_id == user.id)
     )).scalar() or 0
     moderate = (await db.execute(
-        select(func.count(Slide.id)).where(Slide.current_grade == "moderate")
+        select(func.count(Slide.id))
+        .where(Slide.current_grade == "moderate")
+        .where(Slide.user_id == user.id)
     )).scalar() or 0
 
-    recent_q = select(Slide).order_by(Slide.created_at.desc()).limit(5)
+    recent_q = select(Slide).where(Slide.user_id == user.id).order_by(Slide.created_at.desc()).limit(5)
     recent = (await db.execute(recent_q)).scalars().all()
 
     return DashboardStats(
@@ -173,3 +202,4 @@ async def dashboard_stats(
         severe_count=severe, mild_count=mild, moderate_count=moderate,
         recent_slides=[_slide_to_response(s) for s in recent],
     )
+

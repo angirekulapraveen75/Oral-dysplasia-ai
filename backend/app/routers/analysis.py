@@ -13,7 +13,7 @@ from app.schemas import (
     AnalysisResultResponse, AnalysisRunRequest, AnalysisRunResponse,
     BoundingBox, PatchResult, ReviewRequest, ReviewResponse,
 )
-from app.routers.slides import get_current_user
+from app.routers.slides import get_current_user, require_roles
 
 router = APIRouter(prefix="/analysis", tags=["Analysis"])
 
@@ -65,7 +65,7 @@ async def _run_analysis_bg(slide_id: int, threshold: float):
 async def run_analysis(
     body: AnalysisRunRequest,
     bg: BackgroundTasks,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_roles(["Consultant Pathologist", "Resident"])),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(Slide).where(Slide.id == body.slide_id))
@@ -74,6 +74,10 @@ async def run_analysis(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Slide not found")
     if slide.status == "analyzing":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Already analyzing")
+
+    # Enforce ownership check (IDOR prevention)
+    if slide.user_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Access denied to run analysis on this slide.")
 
     bg.add_task(_run_analysis_bg, slide.id, body.confidence_threshold)
 
@@ -95,6 +99,10 @@ async def get_result(
     slide = result.scalars().first()
     if not slide:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Slide not found")
+
+    # Enforce ownership check (IDOR prevention)
+    if slide.user_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Access denied to this slide analysis.")
 
     patches_q = await db.execute(select(Patch).where(Patch.slide_id == slide_id))
     patches = patches_q.scalars().all()
@@ -127,13 +135,17 @@ async def get_result(
 async def submit_review(
     slide_id: int,
     body: ReviewRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_roles(["Consultant Pathologist", "Resident"])),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(Slide).where(Slide.id == slide_id))
     slide = result.scalars().first()
     if not slide:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Slide not found")
+
+    # Enforce ownership check (IDOR prevention)
+    if slide.user_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Access denied to this slide review.")
 
     annotation = Annotation(
         slide_id=slide.id, user_id=user.id,
@@ -153,3 +165,4 @@ async def submit_review(
         icd_10_code=body.icd_10_code,
         signed_by=user.name,
     )
+

@@ -8,7 +8,7 @@ from app.auth import decrypt_pii
 from app.database import get_db
 from app.models import Annotation, Report, Slide, User
 from app.schemas import ReportResponse
-from app.routers.slides import get_current_user
+from app.routers.slides import require_roles
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
@@ -17,13 +17,18 @@ router = APIRouter(prefix="/reports", tags=["Reports"])
 async def export_report(
     slide_id: int,
     format: str = Query("fhir", enum=["pdf", "dicom", "fhir", "patient_pdf"]),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_roles(["Consultant Pathologist", "Resident"])),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(Slide).where(Slide.id == slide_id))
     slide = result.scalars().first()
     if not slide:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Slide not found")
+
+    # Enforce ownership check (IDOR prevention)
+    if slide.user_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Access denied to this report.")
+
 
     patient_name = decrypt_pii(slide.patient_name_enc)
     patient_id = decrypt_pii(slide.patient_id_enc)
@@ -36,8 +41,8 @@ async def export_report(
         .order_by(Annotation.created_at.desc())
     )
     anno = anno_q.scalars().first()
-    icd10 = anno.icd_10_code if anno else "K13.29"
-    comments = anno.comments if anno else ""
+    icd10 = anno.icd_10_code if (anno and anno.icd_10_code) else "K13.29"
+    comments = anno.comments if (anno and anno.comments) else ""
 
     current_grade = slide.current_grade or "pending"
 
