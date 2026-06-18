@@ -1,6 +1,30 @@
 // OralDysplasia AI — Web Client Controller
 
+// ── Demo Mode Detection ────────────────────────────────────────────
+// When hosted on GitHub Pages (no backend), enable demo mode with
+// localStorage-based simulation so registration/login/dashboard work.
+const IS_DEMO_MODE = window.location.hostname.includes("github.io");
 const API_BASE = "/api/v1";
+
+// ── Demo Mode Helpers (GitHub Pages localStorage simulation) ───────
+function _demoGetUsers() {
+    try { return JSON.parse(localStorage.getItem("demo_users") || "[]"); } catch { return []; }
+}
+function _demoSaveUsers(users) {
+    localStorage.setItem("demo_users", JSON.stringify(users));
+}
+function _demoGetSlides() {
+    try { return JSON.parse(localStorage.getItem("demo_slides") || "[]"); } catch { return []; }
+}
+function _demoSaveSlides(slides) {
+    localStorage.setItem("demo_slides", JSON.stringify(slides));
+}
+function _demoMakeToken(email) {
+    // Simple base64 mock JWT for demo
+    const header = btoa(JSON.stringify({alg:"HS256",typ:"JWT"}));
+    const payload = btoa(JSON.stringify({sub:email, exp: Date.now()+86400000}));
+    return `${header}.${payload}.demo_signature`;
+}
 
 // Global Session State
 let token = localStorage.getItem("jwt_token");
@@ -295,6 +319,28 @@ function setupEventListeners() {
 
         errBlock.classList.add("hidden");
         showLoader(true, "Registering pathologist credentials...");
+
+        if (IS_DEMO_MODE) {
+            // Demo mode: save to localStorage
+            await new Promise(r => setTimeout(r, 800)); // simulate network delay
+            const users = _demoGetUsers();
+            if (users.find(u => u.email === email)) {
+                showLoader(false);
+                errBlock.textContent = "Email already registered";
+                errBlock.classList.remove("hidden");
+                return;
+            }
+            const newUser = { id: users.length + 1, name, email, license_id, role, institution, password };
+            users.push(newUser);
+            _demoSaveUsers(users);
+            token = _demoMakeToken(email);
+            user = { id: newUser.id, name, email, role, institution, license_id };
+            localStorage.setItem("jwt_token", token);
+            localStorage.setItem("user", JSON.stringify(user));
+            showLoader(false);
+            checkAuthSession();
+            return;
+        }
 
         try {
             const res = await fetch(`${API_BASE}/auth/signup`, {
